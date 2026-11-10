@@ -1,0 +1,40 @@
+async page => {
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const context=page.context(),base=page.url().split('/').slice(0,3).join('/');
+  assert(base.startsWith('chrome-extension://'),'Run this check with the isolated installed extension');
+  const manifest=await page.evaluate(()=>chrome.runtime.getManifest());
+  assert(!manifest.permissions.includes('contextMenus'),'The extension must not request page context menus');
+  assert(!manifest.permissions.includes('activeTab'),'Host access must be sufficient without activeTab');
+  const sourceUrl='http://127.0.0.1:4173/?location=Spain%7CBarcelona';
+  const source=await context.newPage();await source.goto(sourceUrl);
+  await source.evaluate(()=>document.title='Find Your Perfect Career | New Relic');
+  const popup=await context.newPage();
+  await popup.setViewportSize({width:360,height:420});
+  await popup.goto(base+'/popup.html');
+  await popup.waitForFunction(()=>!document.querySelector('#popup-stats').textContent.includes('Loading'));
+  assert(await popup.getByRole('button',{name:'Review changes',exact:true}).count()===0,'Review changes must be absent');
+  assert(await popup.getByRole('button',{name:'Monitor this site with Evans',exact:true}).count()===1,'Current-site action must be visible');
+  for(const theme of ['dark','light']){
+    await popup.evaluate(async theme=>chrome.runtime.sendMessage({type:'SETTINGS',patch:{theme}}),theme);
+    await popup.reload();await popup.waitForFunction(()=>!document.querySelector('#popup-stats').textContent.includes('Loading'));
+    assert(await popup.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Popup must not overflow');
+    await popup.locator('body').screenshot({path:`output/playwright/popup-1.2.1-${theme}.png`,animations:'disabled'});
+  }
+  await source.bringToFront();
+  const active=await popup.evaluate(async()=>(await chrome.tabs.query({active:true,currentWindow:true}))[0]);
+  assert(active.url===source.url(),'The source must be the active tab before using the popup');
+  const opened=context.waitForEvent('page');
+  await popup.getByRole('button',{name:'Monitor this site with Evans',exact:true}).click();
+  const draft=await opened;await draft.locator('#add-form').waitFor();
+  const text=await draft.locator('#bulk-urls').inputValue();
+  assert(text===sourceUrl,'Popup must prefill only the URL, preserving encoded query parameters: '+text);
+  await draft.locator('#add-submit').click();await draft.waitForFunction(()=>!document.querySelector('dialog').open);
+  assert(await draft.evaluate(async url=>(await import('./core/db.js')).all('pages').then(p=>p.some(v=>v.url===url)),sourceUrl),'Popup site must be saved with the complete URL and encoded query parameters');
+  const internal=await context.newPage();await internal.goto(base+'/popup.html');
+  await draft.bringToFront();
+  await internal.getByRole('button',{name:'Monitor this site with Evans',exact:true}).click();
+  await internal.getByText('Open an HTTP or HTTPS page to monitor it.',{exact:true}).waitFor();
+  assert(await internal.locator('#monitor-site').isEnabled(),'Invalid-site errors must leave the action retryable');
+  await internal.close();await source.close();await draft.close();
+  return {ok:true,coverage:['no context-menu permission','no activeTab permission','removed review action','balanced light/dark popup','URL-only active-tab handoff','encoded query parameters retained','site saved','unsupported tab error']};
+}

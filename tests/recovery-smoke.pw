@@ -1,0 +1,33 @@
+async (page) => {
+  const assert=(x,m)=>{if(!x)throw new Error(m);};
+  const rpc=(type,data={})=>page.evaluate(async({type,data})=>{const r=await chrome.runtime.sendMessage({type,...data});if(!r?.ok)throw new Error(r?.error);return r.data;},{type,data});
+  await rpc('SETTINGS',{patch:{paused:true}});
+  await rpc('ADD',{pages:[{name:'Recovery test',url:'http://127.0.0.1:4174/dynamic?recovery=1',mode:'rendered'}]});
+  const p=(await rpc('STATUS')).pages.find(p=>p.name==='Recovery test');
+  const run=await rpc('RUN',{ids:[p.id]});
+  for(let i=0;i<50;i++){
+    const tabs=await page.evaluate(async()=>(await chrome.storage.session.get('evansTabs')).evansTabs||[]);
+    if(tabs.length)break;
+    await page.waitForTimeout(100);
+  }
+  const cdp=await page.context().newCDPSession(page);
+  const targets=await cdp.send('Target.getTargets');
+  const worker=targets.targetInfos.find(t=>t.type==='service_worker'&&t.url.includes('/background.js'));
+  assert(worker,'Expected a service worker target');
+  await cdp.send('Target.closeTarget',{targetId:worker.targetId});
+  await rpc('STATUS');
+  let complete;
+  for(let i=0;i<200;i++){
+    complete=await page.evaluate(async id=>(await import('./core/db.js')).get('runs',id),run.id);
+    if(complete.status!=='running')break;
+    await page.waitForTimeout(200);
+  }
+  assert(complete.status==='complete'&&complete.completed===1&&complete.errors===0,'Interrupted pass must resume and finish successfully');
+  const checks=await page.evaluate(async id=>(await import('./core/db.js')).all('checks','runId',id),run.id);
+  assert(checks.length===1,'Resumption must not duplicate check records');
+  const owned=await page.evaluate(async()=>(await chrome.storage.session.get('evansTabs')).evansTabs||[]);
+  assert(!owned.length,'Temporary tabs must be cleaned after a resumed pass');
+  await rpc('DELETE',{ids:[p.id]});
+  await rpc('SETTINGS',{patch:{paused:false}});
+  return {ok:true,coverage:['worker interruption','durable queue','automatic resumption','exactly one check record','temporary tab cleanup']};
+}

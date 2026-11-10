@@ -1,0 +1,47 @@
+async page => {
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.evaluate(async()=>{
+    const {transaction}=await import('./core/db.js'),{makePage,DEFAULT_SETTINGS}=await import('./core/model.js');
+    const before=Array.from({length:100},(_,i)=>`Position ${i}: previous opportunity`).join('\n'),after=before.replaceAll('previous','new');
+    await transaction(['pages','changes','runs','settings'],'readwrite',s=>{
+      s.pages.clear();s.changes.clear();s.runs.clear();s.settings.put({...DEFAULT_SETTINGS,paused:true,uiVersion:2});
+      for(const id of ['a','b','c'])s.pages.put({...makePage({id,name:`Page ${id.toUpperCase()}`,url:`https://example.com/${id}`}),unread:id==='a'?2:1});
+      for(const [index,id] of ['a-new','a-old','b-new','c-new'].entries())s.changes.put({id,pageId:id[0],timestamp:Date.now()-index*1000,before,after,read:false,filtered:false});
+    });
+  });
+  await page.reload();await page.locator('[data-nav="changes"]').click();await page.locator('.comparison').waitFor();
+  const selected=()=>page.locator('.comparison').getAttribute('data-change-id');
+  const top=()=>page.locator('.diff-content').evaluate(el=>el.scrollTop);
+  await page.locator('[data-action="diff-mode"][data-value="changes"]').focus();
+  await page.keyboard.press('ArrowDown');assert(await top()>0,'ArrowDown must scroll comparison from the toolbar');
+  assert(await selected()==='a-new','ArrowDown must retain selected evidence');
+  await page.keyboard.press('ArrowUp');assert(await top()===0,'ArrowUp must scroll comparison up');
+  await page.locator('.diff-content').focus();await page.keyboard.press('ArrowDown');
+  assert(await top()>0&&await selected()==='a-new','Focused frame arrows must also scroll without navigation');
+  await page.keyboard.press('n');assert(await selected()==='b-new','N must skip the older revision of page A');
+  await page.keyboard.press('p');assert(await selected()==='a-new','P must return to the latest revision of page A');
+  await page.keyboard.press('p');assert(await selected()==='a-new','P must stop at the first page');
+  await page.keyboard.press('j');await page.keyboard.press('k');assert(await selected()==='a-new','Retired J/K shortcuts must not navigate');
+  await page.locator('#change-page').selectOption('a');await page.locator('.diff-content').focus();
+  await page.keyboard.press('n');assert(await selected()==='b-new','N must move beyond a selected page filter');
+  assert(await page.locator('#change-page').inputValue()==='b','Page selector must follow keyboard navigation');
+  await page.keyboard.press('n');assert(await selected()==='c-new','N must reach the next monitored page');
+  await page.keyboard.press('n');assert(await selected()==='c-new','N must stop at the last page');
+  await page.locator('#change-page').evaluate(el=>el.addEventListener('keydown',e=>queueMicrotask(()=>window.selectKeyPrevented=e.defaultPrevented),{once:true}));
+  await page.locator('#change-page').focus();await page.keyboard.press('p');
+  assert(await page.evaluate(()=>window.selectKeyPrevented===false),'Shortcuts must not intercept native select input');
+  await page.locator('[data-nav="pages"]').click();await page.getByRole('button',{name:'Add pages',exact:true}).click();
+  await page.locator('#bulk-urls').fill('n');await page.keyboard.press('p');
+  assert(await page.locator('#bulk-urls').inputValue()==='np','Dialog typing must remain untouched');
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  const base=page.url().split(/[?#]/)[0];
+  await page.goto(base+'?'+new URLSearchParams({add:'Example jobs | https://example.com/new-jobs'}));
+  await page.locator('#add-form').waitFor();
+  assert(await page.locator('#bulk-urls').inputValue()==='Example jobs | https://example.com/new-jobs','Popup handoff must prefill the current site');
+  assert(!new URL(page.url()).searchParams.has('add'),'Draft query must be consumed once');
+  await page.locator('#add-submit').click();await page.waitForFunction(()=>!document.querySelector('dialog').open);
+  assert(await page.evaluate(async()=>(await import('./core/db.js')).all('pages').then(p=>p.some(v=>v.url==='https://example.com/new-jobs'))),'Current site must save through the normal add flow');
+  assert(!errors.length,errors.join('\n'));
+  return {ok:true,coverage:['global arrow scrolling','page-level N/P navigation','page filter following','boundary behavior','retired J/K','native typing','popup draft handoff and save']};
+}

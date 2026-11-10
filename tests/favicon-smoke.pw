@@ -1,0 +1,22 @@
+async page => {
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const rpc=(type,data={})=>page.evaluate(async({type,data})=>{const result=await chrome.runtime.sendMessage({type,...data});if(!result.ok)throw new Error(result.error);return result.data;},{type,data});
+  await rpc('SETTINGS',{patch:{paused:true,notifications:false}});
+  const old=(await rpc('STATUS')).pages.filter(p=>p.url.startsWith('http://127.0.0.1:4174/'));if(old.length)await rpc('DELETE',{ids:old.map(p=>p.id)});
+  await rpc('ADD',{pages:[{name:'Static icon',url:'http://127.0.0.1:4174/static',mode:'fetch'},{name:'Rendered icon',url:'http://127.0.0.1:4174/dynamic',mode:'rendered'}]});
+  const pages=(await rpc('STATUS')).pages.filter(p=>p.url.startsWith('http://127.0.0.1:4174/'));
+  const run=await rpc('RUN',{ids:pages.map(p=>p.id)});
+  for(let attempt=0;attempt<150;attempt++){const current=await page.evaluate(async id=>(await import('./core/db.js')).get('runs',id),run.id);if(current?.status==='complete')break;await page.waitForTimeout(200);}
+  const result=(await rpc('STATUS')).pages.filter(p=>pages.some(old=>old.id===p.id));
+  assert(result.length===2&&result.every(p=>p.lastStatus==='baseline'),'Both capture modes must establish baselines: '+JSON.stringify(result.map(p=>({mode:p.mode,status:p.lastStatus,error:p.error}))));
+  assert(result.every(p=>p.faviconUrl==='http://127.0.0.1:4174/brand-icon.svg'),'Both capture modes must discover and persist the declared favicon');
+  const staticPage=result.find(p=>p.mode==='fetch');
+  await rpc('UPDATE_PAGE',{page:{...staticPage,url:'http://127.0.0.1:4174/another'}});
+  assert(!(await rpc('STATUS')).pages.find(p=>p.id===staticPage.id).faviconUrl,'Changing a URL must clear the old favicon');
+  await page.goto(page.url().split('#')[0]+'#pages');
+  await page.locator('[data-action="filter"][data-value="all"]').click();
+  const favicon=page.locator('.page-favicon[src="http://127.0.0.1:4174/brand-icon.svg"]');
+  await favicon.waitFor();
+  await page.waitForFunction(()=>document.querySelector('.page-favicon[src="http://127.0.0.1:4174/brand-icon.svg"]')?.naturalWidth>0);
+  return {ok:true,coverage:['HTML capture favicon','rendered capture favicon','persisted metadata','clear stale icon on URL change','real SVG image under extension CSP']};
+}

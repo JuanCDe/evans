@@ -1,0 +1,42 @@
+async (page) => {
+  const assert=(x,m)=>{if(!x)throw new Error(m);};
+  const rpc=(type,data={})=>page.evaluate(async({type,data})=>{const r=await chrome.runtime.sendMessage({type,...data});if(!r?.ok)throw new Error(r?.error);return r.data;},{type,data});
+  const read=(name)=>page.evaluate(async name=>(await import('./core/db.js')).all(name),name);
+  await rpc('SETTINGS',{patch:{paused:true}});
+  await rpc('DELETE',{ids:(await rpc('STATUS')).pages.filter(p=>p.name==='Restore test').map(p=>p.id)});
+  const data={format:'evans',version:1,exportedAt:new Date().toISOString(),pages:[{id:'restore-page',name:'Restore test',url:'http://127.0.0.1:4174/restore',mode:'fetch'}],
+    changes:[{id:'restore-change',pageId:'restore-page',runId:'restore-run',timestamp:Date.now(),before:'Old position',after:'New position',legacyDiff:'<del onclick="bad()">Old position</del><ins>New &amp; Remote<img src="http://127.0.0.1:4174/tracking" onerror="bad()"></ins><script>bad()</script>'}],
+    runs:[{id:'restore-run',startedAt:Date.now(),endedAt:Date.now(),status:'complete',source:'manual',queue:['restore-page'],total:1,completed:1,changed:1,errors:0}],
+    checks:[{id:'restore-change',pageId:'restore-page',runId:'restore-run',timestamp:Date.now(),status:'changed'}]};
+  const first=await rpc('IMPORT',{data});assert(first.added===1,'Native import must add one page');
+  const second=await rpc('IMPORT',{data});assert(second.added===0&&second.duplicates===1,'Reimport must not duplicate a page');
+  const restored=(await rpc('STATUS')).pages.find(p=>p.name==='Restore test');
+  assert((await read('changes')).filter(c=>c.id==='restore-change').length===1,'Backup changes must not duplicate on reimport');
+  const check=(await read('checks')).find(c=>c.id==='restore-change');
+  assert(check.pageId===restored.id&&check.runId==='restore-run','Check relations must be remapped');
+  assert((await read('runs')).find(r=>r.id==='restore-run').queue[0]===restored.id,'Run queue must be remapped');
+  const requests=[];page.on('request',r=>requests.push(r.url()));
+  await page.goto(page.url().split('#')[0]+'#changes/restore-change');
+  await page.getByRole('heading',{name:'Restore test',exact:true}).waitFor();
+  assert((await page.locator('.diff-content').textContent()).includes('New & Remote'),'Legacy entities must decode');
+  assert(await page.locator('.diff-content img,.diff-content script').count()===0,'Imported markup must never become executable elements');
+  assert(!requests.some(u=>u.includes('/tracking')),'Legacy rendering must not load remote resources');
+  const pickerOpened=page.context().waitForEvent('page');
+  await rpc('PICK',{pageId:restored.id});
+  const picker=await pickerOpened;
+  await picker.locator('[data-evans-picker]').first().waitFor();
+  await picker.locator('#jobs').click();
+  for(let i=0;i<30;i++){
+    if((await rpc('STATUS')).pages.find(p=>p.id===restored.id).selector)break;
+    await page.waitForTimeout(100);
+  }
+  assert((await rpc('STATUS')).pages.find(p=>p.id===restored.id).selector==='#jobs','Visual picker must save a unique selector');
+  await picker.close();
+  const setting=(await rpc('STATUS')).settings;
+  await rpc('READ',{ids:['restore-change']});
+  assert((await rpc('STATUS')).pages.find(p=>p.id===restored.id).unread===0,'Imported unread count must update');
+  await rpc('DELETE',{ids:[restored.id]});
+  await rpc('SETTINGS',{patch:{paused:false}});
+  assert(!(await read('changes')).some(c=>c.id==='restore-change'),'Deleting restored page must delete imported changes');
+  return {ok:true,coverage:['native backup import','idempotent reimport','history relations','inert legacy markup','visual element picker','imported read counts','cascade deletion']};
+}

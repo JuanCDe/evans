@@ -1,0 +1,85 @@
+async page => {
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.route('https://icons.example/**',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#71365e"/></svg>'}));
+  await page.evaluate(async()=>{
+    const {transaction}=await import('./core/db.js'),{makePage,DEFAULT_SETTINGS}=await import('./core/model.js');
+    const p=makePage({id:'reading-page',name:'Reading fixture',url:'https://icons.example/careers',faviconUrl:'https://icons.example/custom.svg'});
+    const before=Array.from({length:80},(_,i)=>`Position ${i}: previous opportunity in Madrid`).join('\n');
+    const after=before.replaceAll('previous','new');
+    await transaction(['pages','changes','runs','settings'],'readwrite',s=>{
+      s.pages.clear();s.changes.clear();s.runs.clear();s.pages.put({...p,unread:4});s.settings.put({...DEFAULT_SETTINGS,paused:true,uiVersion:2});
+      for(let i=0;i<4;i++)s.changes.put({id:`reading-${i}`,pageId:p.id,timestamp:Date.now()-i*1000,before,after,read:false,filtered:false});
+    });
+  });
+  await page.reload();await page.locator('[data-nav="changes"]').click();await page.locator('.comparison').waitFor();
+  const read=()=>page.evaluate(async()=>(await import('./core/db.js')).all('changes'));
+  await page.waitForTimeout(200);
+  assert(!(await read())[0].read,'Long comparison must remain unread before reaching the end');
+  // Leaving an unfinished comparison must not mark it read.
+  await page.locator('[data-action="select-change"][data-id="reading-1"]').click();
+  assert(!(await read()).find(c=>c.id==='reading-0').read,'Leaving before the end must keep unread state');
+  await page.locator('[data-action="select-change"][data-id="reading-0"]').click();
+  await page.locator('.diff-content').focus();
+  await page.keyboard.press('ArrowDown');
+  assert(await page.locator('.comparison').getAttribute('data-change-id')==='reading-0','Arrow keys in the frame must scroll instead of selecting another change');
+  await page.evaluate(()=>{
+    window.readingFrame=document.querySelector('.diff-content');window.readingItem=document.querySelector('.finding-item.selected');
+    document.querySelector('.findings-list').scrollTop=25;
+    window.readingFrame.scrollTop=window.readingFrame.scrollHeight;
+  });
+  const before=await page.evaluate(()=>({hash:location.hash,y:scrollY,top:readingFrame.scrollTop,list:document.querySelector('.findings-list').scrollTop,count:document.querySelectorAll('.finding-item').length}));
+  await page.waitForFunction(async()=>(await import('./core/db.js')).get('changes','reading-0').then(c=>c.read));
+  await page.waitForTimeout(500);
+  const after=await page.evaluate(()=>({hash:location.hash,y:scrollY,top:document.querySelector('.diff-content').scrollTop,list:document.querySelector('.findings-list').scrollTop,count:document.querySelectorAll('.finding-item').length,same:readingFrame===document.querySelector('.diff-content')&&readingItem===document.querySelector('.finding-item.selected'),focused:document.activeElement===readingFrame}));
+  for(const key of ['hash','y','top','list','count'])assert(before[key]===after[key],`Reading must preserve ${key}: ${before[key]} / ${after[key]}`);
+  assert(after.same&&after.focused,'Reading must keep the same DOM nodes and keyboard focus');
+  assert(await page.locator('.comparison-read-state').textContent()==='Read','Read label must update in place');
+  assert(await page.locator('.finding-item.selected').getAttribute('data-id')==='reading-0','Completed change must stay selected');
+  // Theme refresh also exercises background refresh without reconstructing the frame.
+  await page.locator('#theme-toggle').click();
+  assert(await page.evaluate(()=>readingFrame===document.querySelector('.diff-content')&&readingFrame.scrollTop>0),'Refresh must preserve the comparison and scroll');
+  await page.locator('[data-action="select-change"][data-id="reading-1"]').click();
+  assert(await page.locator('.comparison').getAttribute('data-change-id')==='reading-1','Selecting another change must navigate');
+  assert(await page.locator('[data-action="select-change"][data-id="reading-0"]').count()===0,'Completed item must leave Unread after navigation');
+  await page.locator('[data-action="change-filter"][data-value="read"]').click();
+  assert(await page.locator('.finding-item').count()===1,'Read tab must contain the completed change');
+  await page.locator('[data-nav="pages"]').click();await page.locator('.pages-table').waitFor();await page.locator('[data-nav="changes"]').click();await page.locator('.comparison').waitFor();
+  await page.locator('[data-action="change-filter"][data-value="unread"]').click();
+  assert(await page.locator('.finding-item').count()===3,'Returning to Unread must not restore the read item');
+  await page.locator('.page-avatar.has-favicon').first().waitFor();
+  assert(await page.locator('.page-favicon').first().getAttribute('src')==='https://icons.example/custom.svg','Custom favicon must be used');
+  await page.route('https://icons.example/custom.svg',route=>route.abort());
+  await page.locator('[data-nav="pages"]').click();await page.locator('.pages-table').waitFor();
+  await page.waitForTimeout(300);
+  assert(await page.locator('.page-avatar').first().textContent()==='','Favicon fallback must never show initials');
+  const extraction=await page.evaluate(async()=>{
+    const {extractDocument}=await import('./core/extract.js');
+    const result=extractDocument({url:'https://site.example/jobs/list'},'<html><head><base href="/brand/"><link rel="shortcut icon" href="mark.svg"></head><body>Careers content long enough for extraction.</body></html>');
+    const unsafe=extractDocument({url:'https://site.example/jobs'},'<html><head><link rel="icon" href="javascript:alert(1)"></head><body>Careers content long enough for extraction.</body></html>');
+    return {icon:result.faviconUrl,unsafe:unsafe.faviconUrl};
+  });
+  assert(extraction.icon==='https://site.example/brand/mark.svg'&&!extraction.unsafe,'Favicon discovery must resolve relative/base paths and reject unsafe URLs');
+  await page.screenshot({path:'output/playwright/reading-pages-desktop.png'});
+  await page.locator('[data-nav="changes"]').click();await page.locator('.comparison').waitFor();
+  await page.screenshot({path:'output/playwright/reading-changes-desktop.png'});
+  await page.setViewportSize({width:390,height:844});
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile changes must not overflow');
+  await page.screenshot({path:'output/playwright/reading-changes-mobile.png'});
+  await page.setViewportSize({width:1360,height:940});
+  await page.locator('[data-action="read-all"]').click();
+  await page.getByRole('heading',{name:'No unread changes.',exact:true}).waitFor();
+  // A short comparison is complete as soon as its end is visible, without needing a scroll.
+  await page.evaluate(async()=>{
+    const {put}=await import('./core/db.js');
+    await put('changes',{id:'short-change',pageId:'reading-page',timestamp:Date.now(),before:'Original opportunity',after:'Updated opportunity',read:false,filtered:false});
+    const {get}=await import('./core/db.js');const p=await get('pages','reading-page');await put('pages',{...p,unread:1});
+  });
+  await page.reload();await page.locator('.comparison').waitFor();
+  await page.waitForFunction(async()=>(await import('./core/db.js')).get('changes','short-change').then(c=>c.read));
+  assert(await page.locator('.finding-item.selected').getAttribute('data-id')==='short-change','Last/short change must stay visible after completion');
+  await page.locator('[data-nav="runs"]').click();await page.getByRole('heading',{name:'Runs',exact:true}).waitFor();
+  await page.locator('[data-nav="changes"]').click();await page.getByRole('heading',{name:'No unread changes.',exact:true}).waitFor();
+  assert(!errors.length,errors.join('\n'));
+  return {ok:true,coverage:['read at end','no premature read','stable DOM, scroll, selection, focus and URL','background refresh','keyboard navigation','Read tab','favicon and safe discovery','mobile layout']};
+}
