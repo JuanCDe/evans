@@ -14,7 +14,7 @@ const intervals = [[300,'Every 5 minutes'],[900,'Every 15 minutes'],[3600,'Hourl
 const intervalName = n => intervals.find(v => v[0] === n)?.[1] || `Every ${Math.round(n / 60)} min`;
 const options = (items, selected) => items.map(([v,l]) => `<option value="${esc(v)}" ${String(v) === String(selected) ? 'selected' : ''}>${esc(l)}</option>`).join('');
 const state = {pages: [], changes: [], runs: [], settings: {}, active: null, view:'pages', query:'', filter:'unread', tag:'', sort:'name', selected:new Set(), page:0, changeId:null, changeFilter:'unread', changePage:'', runId:null, diffMode:'changes', changesPage:0, runsPage:0};
-let refreshTimer, importFile, previousFocus;
+let refreshTimer, importFile, previousFocus, pointerPagePicker;
 const main = $('#main'), dialog = $('#dialog');
 // Read state is persisted immediately, but membership stays stable until navigation.
 const heldReadChanges = new Set(), readingRequests = new Map();
@@ -78,6 +78,25 @@ function selectChange(id) {
   render();
 }
 
+function focusComparison() {
+  const frame = main.querySelector('.diff-content');
+  frame?.focus({preventScroll:true});
+  frame?.scrollIntoView({block:'nearest', inline:'nearest'});
+}
+
+function revealSelectedFinding() {
+  const list = main.querySelector('.findings-list');
+  const row = list?.querySelector('.finding-item.selected');
+  if (!row) return;
+  const bounds = list.getBoundingClientRect(), item = row.getBoundingClientRect();
+  const offset = (start, end, min, max) => start < min ? start - min : Math.max(0, end - max);
+  list.scrollBy({
+    top: offset(item.top, item.bottom, bounds.top, bounds.top + list.clientHeight),
+    left: offset(item.left, item.right, bounds.left, bounds.left + list.clientWidth),
+    behavior:'instant',
+  });
+}
+
 function toast(message, error = false) {
   const el = document.createElement('div'); el.className = `toast ${error ? 'error' : ''}`; el.textContent = message; $('#toasts').append(el); setTimeout(() => el.remove(), 5500);
 }
@@ -104,7 +123,9 @@ function route() {
   render();
 }
 async function refresh() {
-  const data = await request('STATUS'); state.pages = data.pages; state.settings = data.settings;
+  const data = await request('STATUS');
+  state.pages = data.pages.sort((a,b) => a.name.localeCompare(b.name) || a.url.localeCompare(b.url));
+  state.settings = data.settings;
   if(state.settings.uiVersion!==2){await request('SETTINGS',{patch:{uiVersion:2}});state.settings.uiVersion=2;}
   [state.changes, state.runs] = await Promise.all([all('changes'), all('runs')]);
   for (const change of state.changes) if (readingRequests.has(change.id)) change.read = true;
@@ -185,7 +206,7 @@ function renderComparison(c) {
   if(!c) return '';
   const p=pageById(c.pageId), changesOnly=state.diffMode==='changes', comparison=comparisonFor(c);
   const body=renderDiff(comparison,state.diffMode);
-  return `<header class="comparison-header"><div><span class="detail-kicker">${c.imported?'Imported history':c.filtered?'Filtered change':'Change detected'}</span><h2>${esc(p?.name||'Deleted page')}</h2><p>${fullDate(c.timestamp)}</p></div><div class="comparison-actions">${!c.read?`<button class="icon-button" data-action="read-change" data-id="${esc(c.id)}" aria-label="Mark as read">${icon('check')}</button>`:''}${p?`<a class="icon-button" href="${esc(p.url)}" target="_blank" rel="noreferrer" aria-label="Open ${esc(p.name)}">${icon('external')}</a>`:''}</div></header><div class="diff-toolbar"><span class="helper">↑ / ↓: scroll · n / p: next / previous page · reaching the end marks as read</span><div class="segmented" aria-label="Comparison view">${[['diff','Comparison'],['changes','Changes only'],['before','Before'],['after','After']].map(([k,l])=>`<button class="${state.diffMode===k?'active':''}" data-action="diff-mode" data-value="${k}" aria-pressed="${state.diffMode===k}">${l}</button>`).join('')}</div></div><div class="diff-legend"><strong>${comparison.hunks.length} changed ${comparison.hunks.length===1?'section':'sections'}</strong><span class="diff-count-add">+ ${comparison.added} ${comparison.added===1?'line':'lines'}</span><span class="diff-count-remove">− ${comparison.removed} ${comparison.removed===1?'line':'lines'}</span>${c.matchedKeywords?.length?`<span class="keyword-matches">${esc(c.matchedKeywords.join(', '))}</span>`:''}</div><div class="diff-content structured-diff ${changesOnly?'changes-only':''}" tabindex="0" aria-label="${state.diffMode==='before'?'Before, removals highlighted':state.diffMode==='after'?'After, additions highlighted':'Highlighted changes'}">${body}<span class="diff-end" aria-hidden="true"></span></div><footer class="comparison-footer">${icon('shield')}Saved locally<span class="comparison-read-state" role="status">${c.read?'Read':''}</span></footer>`;
+  return `<header class="comparison-header"><div><span class="detail-kicker">${c.imported?'Imported history':c.filtered?'Filtered change':'Change detected'}</span><h2>${esc(p?.name||'Deleted page')}</h2><p>${fullDate(c.timestamp)}</p></div><div class="comparison-actions">${!c.read?`<button class="icon-button" data-action="read-change" data-id="${esc(c.id)}" aria-label="Mark as read">${icon('check')}</button>`:''}${p?`<a class="icon-button" href="${esc(p.url)}" target="_blank" rel="noreferrer" aria-label="Open ${esc(p.name)}">${icon('external')}</a>`:''}</div></header><div class="diff-toolbar"><span class="helper">↑ / ↓: scroll · n / p: next / previous page (change history order) · reaching the end marks as read</span><div class="segmented" aria-label="Comparison view">${[['diff','Comparison'],['changes','Changes only'],['before','Before'],['after','After']].map(([k,l])=>`<button class="${state.diffMode===k?'active':''}" data-action="diff-mode" data-value="${k}" aria-pressed="${state.diffMode===k}">${l}</button>`).join('')}</div></div><div class="diff-legend"><strong>${comparison.hunks.length} changed ${comparison.hunks.length===1?'section':'sections'}</strong><span class="diff-count-add">+ ${comparison.added} ${comparison.added===1?'line':'lines'}</span><span class="diff-count-remove">− ${comparison.removed} ${comparison.removed===1?'line':'lines'}</span>${c.matchedKeywords?.length?`<span class="keyword-matches">${esc(c.matchedKeywords.join(', '))}</span>`:''}</div><div class="diff-content structured-diff ${changesOnly?'changes-only':''}" tabindex="0" aria-label="${state.diffMode==='before'?'Before, removals highlighted':state.diffMode==='after'?'After, additions highlighted':'Highlighted changes'}">${body}<span class="diff-end" aria-hidden="true"></span></div><footer class="comparison-footer">${icon('shield')}Saved locally<span class="comparison-read-state" role="status">${c.read?'Read':''}</span></footer>`;
 }
 function renderRuns() {
   const selected=state.runs.find(r=>r.id===state.runId)||state.runs[0];
@@ -300,13 +321,22 @@ document.addEventListener('input',e=>{
   if(e.target.id==='page-search'){state.query=e.target.value;state.page=0;render();}
   if(e.target.id==='bulk-urls')updateBulkFeedback();
 });
+document.addEventListener('pointerdown', e => {
+  // Return pointer users to the reader while preserving native keyboard selection.
+  pointerPagePicker = e.target.closest('#change-page');
+});
 document.addEventListener('change',async e=>{
   const el=e.target;
   if(el.dataset.select){el.checked?state.selected.add(el.dataset.select):state.selected.delete(el.dataset.select);render();}
   if(el.id==='select-visible'){for(const p of filteredPages().slice(state.page*50,(state.page+1)*50))el.checked?state.selected.add(p.id):state.selected.delete(p.id);render();}
   if(el.id==='sort'){state.sort=el.value;render();}
   if(el.id==='tag-filter'){state.tag=el.value;state.page=0;render();}
-  if(el.id==='change-page'){leaveChange();state.changeId=null;state.changePage=el.value;state.changesPage=0;render();}
+  if(el.id==='change-page'){
+    const focusReader = el === pointerPagePicker;
+    pointerPagePicker = null;
+    leaveChange();state.changeId=null;state.changePage=el.value;state.changesPage=0;render();
+    if(focusReader) focusComparison();
+  }
   if(el.id==='import-file'){
     try{
       const file=el.files[0]; if(!file)return;
@@ -360,16 +390,25 @@ try{
 }catch(error){main.innerHTML=empty('alert','Unable to open dashboard.',esc(error.message),'<button class="button" data-action="reload">Retry</button>');}
 
 document.addEventListener('keydown',e=>{
-  if(e.defaultPrevented||dialog.open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||e.target.isContentEditable||state.view!=='changes'||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
+  if(e.target === pointerPagePicker) pointerPagePicker = null;
+  if(e.defaultPrevented||e.isComposing||dialog.open||['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)||e.target.isContentEditable||state.view!=='changes'||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
   if(e.key==='ArrowDown'||e.key==='ArrowUp'){
     const frame=main.querySelector('.diff-content');if(!frame)return;
     e.preventDefault();frame.scrollBy({top:e.key==='ArrowDown'?64:-64,behavior:'instant'});return;
   }
   if(e.key!=='n'&&e.key!=='p')return;
   e.preventDefault();
+  if(e.repeat)return;
   const currentPageId=state.changes.find(c=>c.id===state.changeId)?.pageId||state.changePage;
-  const next=adjacentPageChange(state.pages,filteredChanges(false),currentPageId,e.key==='n'?1:-1);
-  if(next){if(state.changePage)state.changePage=next.pageId;selectChange(next.id);}
+  const next=adjacentPageChange(filteredChanges(false),currentPageId,e.key==='n'?1:-1);
+  if(!next){
+    toast(`No ${e.key==='n'?'next':'previous'} page with matching changes.`);
+    return;
+  }
+  if(state.changePage)state.changePage=next.pageId;
+  selectChange(next.id);
+  revealSelectedFinding();
+  focusComparison();
 });
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')observeReadingEnd();});
 dialog.addEventListener('close',observeReadingEnd);

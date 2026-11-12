@@ -6,30 +6,61 @@ async page => {
     const before=Array.from({length:100},(_,i)=>`Position ${i}: previous opportunity`).join('\n'),after=before.replaceAll('previous','new');
     await transaction(['pages','changes','runs','settings'],'readwrite',s=>{
       s.pages.clear();s.changes.clear();s.runs.clear();s.settings.put({...DEFAULT_SETTINGS,paused:true,uiVersion:2});
-      for(const id of ['a','b','c'])s.pages.put({...makePage({id,name:`Page ${id.toUpperCase()}`,url:`https://example.com/${id}`}),unread:id==='a'?2:1});
-      for(const [index,id] of ['a-new','a-old','b-new','c-new'].entries())s.changes.put({id,pageId:id[0],timestamp:Date.now()-index*1000,before,after,read:false,filtered:false});
+      const pages = {a:'m', b:'z', bb:'read-only', c:'a'};
+      const names = {a:'Delta', b:'Alpha', bb:'Gamma', c:'Beta'};
+      for (const [name,id] of Object.entries(pages)) {
+        s.pages.put({...makePage({id,name:names[name],url:`https://example.com/${id}`}),unread:name==='a'?65:name==='bb'?0:1});
+      }
+      const revisions = ['a-new', ...Array.from({length:64},(_,i)=>`a-old-${i}`), 'b-new', 'bb-read', 'c-new'];
+      for (const [index,id] of revisions.entries()) {
+        s.changes.put({id,pageId:pages[id.split('-')[0]],timestamp:Date.now()-index*1000,before,after,read:id==='bb-read',filtered:false});
+      }
     });
   });
   await page.reload();await page.locator('[data-nav="changes"]').click();await page.locator('.comparison').waitFor();
   const selected=()=>page.locator('.comparison').getAttribute('data-change-id');
   const top=()=>page.locator('.diff-content').evaluate(el=>el.scrollTop);
+  const focused=()=>page.locator('.diff-content').evaluate(el=>document.activeElement===el);
+  const picker=page.locator('#change-page');
+  assert(await picker.evaluate(el=>[...el.options].map(o=>o.text).join(', '))==='All pages, Alpha, Beta, Delta, Gamma','Picker order must follow page names, independent of storage keys');
   await page.locator('[data-action="diff-mode"][data-value="changes"]').focus();
   await page.keyboard.press('ArrowDown');assert(await top()>0,'ArrowDown must scroll comparison from the toolbar');
   assert(await selected()==='a-new','ArrowDown must retain selected evidence');
   await page.keyboard.press('ArrowUp');assert(await top()===0,'ArrowUp must scroll comparison up');
   await page.locator('.diff-content').focus();await page.keyboard.press('ArrowDown');
   assert(await top()>0&&await selected()==='a-new','Focused frame arrows must also scroll without navigation');
-  await page.keyboard.press('n');assert(await selected()==='b-new','N must skip the older revision of page A');
+  await page.keyboard.down('n');
+  await page.keyboard.down('n');
+  await page.keyboard.up('n');
+  assert(await selected()==='b-new','N must skip older revisions of page A and ignore key repeat');
+  assert(await focused()&&await top()===0,'New comparison must be focused and start at the top');
+  assert(await page.locator('.finding-item.selected').evaluate(el=>el.dataset.id==='b-new'&&el.getBoundingClientRect().bottom<=el.parentElement.getBoundingClientRect().bottom+1),'N must reveal the selected row across history pages');
+  await page.keyboard.press('n');assert(await selected()==='c-new','N must skip read-only pages in Unread');
+  await page.keyboard.press('p');assert(await selected()==='b-new','P must also skip read-only pages in Unread');
   await page.keyboard.press('p');assert(await selected()==='a-new','P must return to the latest revision of page A');
   await page.keyboard.press('p');assert(await selected()==='a-new','P must stop at the first page');
   await page.keyboard.press('j');await page.keyboard.press('k');assert(await selected()==='a-new','Retired J/K shortcuts must not navigate');
-  await page.locator('#change-page').selectOption('a');await page.locator('.diff-content').focus();
+  await page.locator('.diff-content').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+  await page.waitForFunction(async()=>(await import('./core/db.js')).get('changes','a-new').then(c=>c.read));
+  assert(await focused()&&await selected()==='a-new','Finishing the comparison must keep the reader focused');
+  await page.keyboard.press('n');assert(await selected()==='b-new','N must advance from a just-read comparison');
+  await page.keyboard.press('p');
+  const previousUnread = await selected();
+  assert(previousUnread==='a-old-0',`P in Unread must open the newest unread revision of the previous page (opened ${previousUnread})`);
+  await picker.dispatchEvent('pointerdown');
+  await picker.focus();
+  await picker.selectOption('m');
+  assert(await focused(),'Choosing a page with a pointer must return focus to the comparison');
   await page.keyboard.press('n');assert(await selected()==='b-new','N must move beyond a selected page filter');
-  assert(await page.locator('#change-page').inputValue()==='b','Page selector must follow keyboard navigation');
+  assert(await picker.inputValue()==='z','Page selector must follow keyboard navigation');
   await page.keyboard.press('n');assert(await selected()==='c-new','N must reach the next monitored page');
   await page.keyboard.press('n');assert(await selected()==='c-new','N must stop at the last page');
-  await page.locator('#change-page').evaluate(el=>el.addEventListener('keydown',e=>queueMicrotask(()=>window.selectKeyPrevented=e.defaultPrevented),{once:true}));
-  await page.locator('#change-page').focus();await page.keyboard.press('p');
+  assert(await page.getByText('No next page with matching changes.',{exact:true}).count()===1,'N must explain when it reaches the last matching page');
+  await picker.focus();
+  await picker.selectOption('z');
+  assert(await picker.evaluate(el=>document.activeElement===el),'Keyboard selection must retain native selector focus');
+  await picker.evaluate(el=>el.addEventListener('keydown',e=>queueMicrotask(()=>window.selectKeyPrevented=e.defaultPrevented),{once:true}));
+  await page.keyboard.press('p');
   assert(await page.evaluate(()=>window.selectKeyPrevented===false),'Shortcuts must not intercept native select input');
   await page.locator('[data-nav="pages"]').click();await page.getByRole('button',{name:'Add pages',exact:true}).click();
   await page.locator('#bulk-urls').fill('n');await page.keyboard.press('p');
