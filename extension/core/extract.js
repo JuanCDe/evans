@@ -5,16 +5,21 @@ export function extractDocument(options = {}, html) {
   if (!root) throw new Error(options.selector ? 'Selected region not found. Update the selector.' : 'No page content found.');
   const excluded = new Set();
   for (const selector of options.excludeSelectors || []) for (const el of root.querySelectorAll(selector)) excluded.add(el);
-  const skip = 'script,style,noscript,svg,canvas,template,iframe,object,embed,input,textarea,select,[hidden],[aria-hidden="true"],[data-evans-picker]';
+  const skip = 'script,style,noscript,svg,canvas,template,iframe,object,embed,input,textarea,select,[hidden],[data-evans-picker]';
   const block = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|BR|DD|DIV|DL|DT|FIELDSET|FIGCAPTION|FIGURE|FOOTER|FORM|H[1-6]|HEADER|HR|LI|MAIN|NAV|OL|P|PRE|SECTION|TABLE|TR|UL)$/;
   const parts = [];
+  let normalizedSlick = false;
   function walk(node) {
     if (node.nodeType === 3) { parts.push(node.nodeValue); return; }
     if (node.nodeType !== 1 || excluded.has(node) || node.matches(skip)) return;
+    // Slick toggles aria-hidden as the carousel rotates and inserts clones for looping.
+    const slickSlide = node.matches('.slick-track > .slick-slide');
+    if (slickSlide ? node.classList.contains('slick-cloned') : node.matches('[aria-hidden="true"]')) return;
     if (html === undefined) {
       const style = getComputedStyle(node);
       if (style.display === 'none' || style.visibility === 'hidden') return;
     } else if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(node.getAttribute('style') || '')) return;
+    if (slickSlide) normalizedSlick = true;
     const isBlock = block.test(node.tagName);
     if (isBlock) parts.push('\n');
     for (const child of node.childNodes) walk(child);
@@ -38,5 +43,5 @@ export function extractDocument(options = {}, html) {
     const url = new URL(icon?.getAttribute('href') || '/favicon.ico', base);
     if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) faviconUrl = url.href;
   } catch {}
-  return {text, title: doc.title, url: html === undefined ? location.href : undefined, faviconUrl};
+  return {text, title: doc.title, url: html === undefined ? location.href : undefined, faviconUrl, normalizedSlick};
 }

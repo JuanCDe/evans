@@ -9,9 +9,10 @@ test('page navigation skips repeated revisions and opens the latest change for e
   assert.equal(adjacentPageChange(changes,'b',-1).id,'a-new');
   assert.equal(adjacentPageChange(changes,'b',1).id,'c-new');
 });
-test('page navigation respects matching evidence and does not wrap at either boundary',()=>{
+test('next wraps within matching evidence and previous stops at the first page',()=>{
   assert.equal(adjacentPageChange(changes,'a',-1),undefined);
-  assert.equal(adjacentPageChange(changes,'c',1),undefined);
+  assert.equal(adjacentPageChange(changes,'c',1).id,'a-new');
+  assert.equal(adjacentPageChange(changes.filter(c=>c.pageId==='c'),'c',1).id,'c-new');
   assert.equal(adjacentPageChange(changes.filter(c=>c.pageId!=='b'),'a',1).id,'c-new');
   assert.equal(adjacentPageChange(changes.filter(c=>c.pageId!=='a'),null,1).id,'b-new');
   assert.equal(adjacentPageChange([],'a',1),undefined);

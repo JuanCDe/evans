@@ -47,9 +47,11 @@ async function checkPage(pageId, runId) {
     const result = await readPage(page);
     faviconUrl = result.faviconUrl;
     const old = await get('snapshots', pageId);
-    snapshot = {id: pageId, text: result.text, timestamp, configVersion: page.configVersion};
+    snapshot = {id: pageId, text: result.text, timestamp, configVersion: page.configVersion, normalizedSlick: result.normalizedSlick};
     check.title = result.title; check.characters = result.text.length;
-    if (!old || old.configVersion !== page.configVersion) check.status = 'baseline';
+    // Older carousel snapshots only contain whichever slides happened to be active.
+    const carouselBaseline = old?.normalizedSlick === undefined && result.normalizedSlick;
+    if (!old || old.configVersion !== page.configVersion || carouselBaseline) check.status = 'baseline';
     else if (old.text === result.text) check.status = 'unchanged';
     else {
       const analysis = analyzeChange(old.text, result.text, page);

@@ -206,7 +206,7 @@ function renderComparison(c) {
   if(!c) return '';
   const p=pageById(c.pageId), changesOnly=state.diffMode==='changes', comparison=comparisonFor(c);
   const body=renderDiff(comparison,state.diffMode);
-  return `<header class="comparison-header"><div><span class="detail-kicker">${c.imported?'Imported history':c.filtered?'Filtered change':'Change detected'}</span><h2>${esc(p?.name||'Deleted page')}</h2><p>${fullDate(c.timestamp)}</p></div><div class="comparison-actions">${!c.read?`<button class="icon-button" data-action="read-change" data-id="${esc(c.id)}" aria-label="Mark as read">${icon('check')}</button>`:''}${p?`<a class="icon-button" href="${esc(p.url)}" target="_blank" rel="noreferrer" aria-label="Open ${esc(p.name)}">${icon('external')}</a>`:''}</div></header><div class="diff-toolbar"><span class="helper">↑ / ↓: scroll · n / p: next / previous page (change history order) · reaching the end marks as read</span><div class="segmented" aria-label="Comparison view">${[['diff','Comparison'],['changes','Changes only'],['before','Before'],['after','After']].map(([k,l])=>`<button class="${state.diffMode===k?'active':''}" data-action="diff-mode" data-value="${k}" aria-pressed="${state.diffMode===k}">${l}</button>`).join('')}</div></div><div class="diff-legend"><strong>${comparison.hunks.length} changed ${comparison.hunks.length===1?'section':'sections'}</strong><span class="diff-count-add">+ ${comparison.added} ${comparison.added===1?'line':'lines'}</span><span class="diff-count-remove">− ${comparison.removed} ${comparison.removed===1?'line':'lines'}</span>${c.matchedKeywords?.length?`<span class="keyword-matches">${esc(c.matchedKeywords.join(', '))}</span>`:''}</div><div class="diff-content structured-diff ${changesOnly?'changes-only':''}" tabindex="0" aria-label="${state.diffMode==='before'?'Before, removals highlighted':state.diffMode==='after'?'After, additions highlighted':'Highlighted changes'}">${body}<span class="diff-end" aria-hidden="true"></span></div><footer class="comparison-footer">${icon('shield')}Saved locally<span class="comparison-read-state" role="status">${c.read?'Read':''}</span></footer>`;
+  return `<header class="comparison-header"><div><span class="detail-kicker">${c.imported?'Imported history':c.filtered?'Filtered change':'Change detected'}</span><h2>${esc(p?.name||'Deleted page')}</h2><p>${fullDate(c.timestamp)}</p></div><div class="comparison-actions">${!c.read?`<button class="icon-button" data-action="read-change" data-id="${esc(c.id)}" aria-label="Mark as read" aria-keyshortcuts="R">${icon('check')}</button>`:''}${p?`<a class="icon-button" href="${esc(p.url)}" target="_blank" rel="noreferrer" aria-label="Open ${esc(p.name)}">${icon('external')}</a>`:''}</div></header><div class="diff-toolbar"><span class="helper">↑ / ↓: scroll · n / p: next / previous page · r: mark as read · reaching the end marks as read</span><div class="segmented" aria-label="Comparison view">${[['diff','Comparison'],['changes','Changes only'],['before','Before'],['after','After']].map(([k,l])=>`<button class="${state.diffMode===k?'active':''}" data-action="diff-mode" data-value="${k}" aria-pressed="${state.diffMode===k}">${l}</button>`).join('')}</div></div><div class="diff-legend"><strong>${comparison.hunks.length} changed ${comparison.hunks.length===1?'section':'sections'}</strong><span class="diff-count-add">+ ${comparison.added} ${comparison.added===1?'line':'lines'}</span><span class="diff-count-remove">− ${comparison.removed} ${comparison.removed===1?'line':'lines'}</span>${c.matchedKeywords?.length?`<span class="keyword-matches">${esc(c.matchedKeywords.join(', '))}</span>`:''}</div><div class="diff-content structured-diff ${changesOnly?'changes-only':''}" tabindex="0" aria-label="${state.diffMode==='before'?'Before, removals highlighted':state.diffMode==='after'?'After, additions highlighted':'Highlighted changes'}">${body}<span class="diff-end" aria-hidden="true"></span></div><footer class="comparison-footer">${icon('shield')}Saved locally<span class="comparison-read-state" role="status">${c.read?'Read':''}</span></footer>`;
 }
 function renderRuns() {
   const selected=state.runs.find(r=>r.id===state.runId)||state.runs[0];
@@ -396,13 +396,17 @@ document.addEventListener('keydown',e=>{
     const frame=main.querySelector('.diff-content');if(!frame)return;
     e.preventDefault();frame.scrollBy({top:e.key==='ArrowDown'?64:-64,behavior:'instant'});return;
   }
-  if(e.key!=='n'&&e.key!=='p')return;
+  if(e.key!=='n'&&e.key!=='p'&&e.key!=='r')return;
   e.preventDefault();
   if(e.repeat)return;
+  if(e.key==='r'){
+    if(state.changeId) void markChangeRead(state.changeId).catch(error => toast(error.message, true));
+    return;
+  }
   const currentPageId=state.changes.find(c=>c.id===state.changeId)?.pageId||state.changePage;
   const next=adjacentPageChange(filteredChanges(false),currentPageId,e.key==='n'?1:-1);
   if(!next){
-    toast(`No ${e.key==='n'?'next':'previous'} page with matching changes.`);
+    if(e.key==='p') toast('No previous page with matching changes.');
     return;
   }
   if(state.changePage)state.changePage=next.pageId;

@@ -17,9 +17,9 @@ async (page) => {
   const original = await rpc('STATUS');
   assert(original.pages.length === 0, 'New workspace must have no monitored pages');
   assert((await read('changes')).length === 0, 'New workspace must have no change history');
-  await rpc('SETTINGS',{patch:{paused:true}});
+  await rpc('SETTINGS',{patch:{paused:true,theme:'light'}});
   await page.evaluate(()=>fetch('http://127.0.0.1:4174/control?v=1'));
-  await page.getByRole('button',{name:'Add pages',exact:true}).click();
+  await page.locator('.heading-actions').getByRole('button',{name:'Add pages',exact:true}).click();
   await page.locator('#bulk-urls').fill('Static test | http://127.0.0.1:4174/static\nDynamic test | http://127.0.0.1:4174/dynamic\nEmpty test | http://127.0.0.1:4174/empty\nError test | http://127.0.0.1:4174/error\nDuplicate | http://127.0.0.1:4174/static#jobs');
   await page.locator('#add-form select[name="mode"]').selectOption('fetch');
   assert((await page.locator('#bulk-feedback').textContent()).includes('4 new · 1 duplicates'),'Bulk preview should deduplicate');
@@ -93,7 +93,29 @@ async (page) => {
   await rpc('DELETE',{ids:added.map(p=>p.id)});
   assert((await rpc('STATUS')).pages.length===0,'Deleting pages must leave an empty watch list');
   assert(!(await read('checks')).some(c=>added.some(p=>p.id===c.pageId)),'Deleting a page must remove its check history');
+
+  await rpc('ADD',{pages:[{name:'Carousel test',url:'http://127.0.0.1:4174/carousel',mode:'rendered'}]});
+  const carousel=(await rpc('STATUS')).pages[0];
+  await page.evaluate(async ({id,configVersion})=>{
+    const {put}=await import('./core/db.js');
+    await put('snapshots',{id,configVersion,timestamp:Date.now(),text:'Open positions\n\nRemote-first engineering team'});
+  },carousel);
+  const checkCarousel=async version=>{
+    await page.evaluate(v=>fetch('http://127.0.0.1:4174/control?v='+v),version);
+    const run=await rpc('RUN',{ids:[carousel.id]});
+    await waitRun(run.id);
+    return (await read('checks','runId',run.id))[0];
+  };
+  assert((await checkCarousel(1)).status==='baseline','Legacy carousel capture must migrate without an alert');
+  const carouselText=(await read('snapshots')).find(s=>s.id===carousel.id).text;
+  assert(carouselText.match(/Engineer in Madrid/g)?.length===1&&!carouselText.includes('Excluded auxiliary text'),'Capture must keep the inactive original, skip clones, and respect unrelated aria-hidden text');
+  assert((await checkCarousel(2)).status==='unchanged','Rotating the active slide must not create a change');
+  assert((await checkCarousel(3)).status==='changed','Editing a slide must still create a change');
+  const carouselChanges=await read('changes','pageId',carousel.id);
+  assert(carouselChanges.length===1&&carouselChanges[0].after.includes('Senior Engineer in Madrid'),'Only the genuine edit must appear in history');
+  await rpc('DELETE',{ids:[carousel.id]});
+
   await rpc('SETTINGS',{patch:{paused:false,concurrency:2}});
   assert(errors.length===0,'No page exceptions: '+errors.join('; '));
-  return {ok:true,passes:4,checks:9,coverage:['bulk add','deduplication','static fetch','hydrated JavaScript','baselines','exact diff','per-page notifications','error handling','keyword filters','pass history','settings','themes','responsive layouts','persistence','read state','cascade delete']};
+  return {ok:true,passes:7,checks:12,coverage:['bulk add','deduplication','static fetch','hydrated JavaScript','baselines','exact diff','per-page notifications','error handling','keyword filters','pass history','settings','themes','responsive layouts','persistence','read state','cascade delete','carousel rotation and edits']};
 }

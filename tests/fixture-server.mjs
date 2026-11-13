@@ -9,6 +9,15 @@ createServer((req,res)=>{
   res.setHeader('Content-Type','text/html; charset=utf-8');
   if(u.pathname==='/error'){res.writeHead(503);res.end('Temporarily unavailable');return;}
   if(u.pathname==='/empty'){res.end('<html><body></body></html>');return;}
+  if(u.pathname==='/carousel'){
+    const first = 'Remote-first engineering team';
+    const second = version===3 ? 'Senior Engineer in Madrid' : 'Engineer in Madrid';
+    res.end(`<main><h1>Open positions</h1><div class="slick-track">
+      <div class="slick-slide slick-cloned" aria-hidden="false">${second}</div>
+      <div class="slick-slide" aria-hidden="${version!==1}">${first}</div>
+      <div class="slick-slide" aria-hidden="${version===1}">${second}</div>
+    </div><p aria-hidden="true">Excluded auxiliary text</p></main>`);return;
+  }
   if(u.pathname==='/dynamic'){
     res.end(`<html><head><title>Dynamic careers</title><link rel="icon" href="/brand-icon.svg"></head><body><main id="jobs">Loading...</main><script>setTimeout(()=>document.querySelector('#jobs').textContent='Open opportunities: ${version===1?'Engineer Madrid':'Designer Barcelona'} · Apply to join our team today.',500)</script></body></html>`);return;
   }

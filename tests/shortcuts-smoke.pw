@@ -54,8 +54,15 @@ async page => {
   await page.keyboard.press('n');assert(await selected()==='b-new','N must move beyond a selected page filter');
   assert(await picker.inputValue()==='z','Page selector must follow keyboard navigation');
   await page.keyboard.press('n');assert(await selected()==='c-new','N must reach the next monitored page');
-  await page.keyboard.press('n');assert(await selected()==='c-new','N must stop at the last page');
-  assert(await page.getByText('No next page with matching changes.',{exact:true}).count()===1,'N must explain when it reaches the last matching page');
+  await page.keyboard.press('ArrowDown');
+  const scrollBeforeRead=await top();
+  assert(scrollBeforeRead>0,'Comparison must be scrollable before pressing R');
+  await page.keyboard.press('r');
+  await page.waitForFunction(async()=>(await import('./core/db.js')).get('changes','c-new').then(c=>c.read));
+  assert(await selected()==='c-new'&&await focused()&&await top()===scrollBeforeRead,'R must keep the comparison open at the same position');
+  await page.keyboard.press('n');assert(await selected()==='a-old-0','N must wrap to the first matching unread page');
+  assert(await picker.inputValue()==='m','Page selector must follow the wrap');
+  assert(await page.getByText('No next page with matching changes.',{exact:true}).count()===0,'Wrapping must not show an end-of-list message');
   await picker.focus();
   await picker.selectOption('z');
   assert(await picker.evaluate(el=>document.activeElement===el),'Keyboard selection must retain native selector focus');
@@ -63,8 +70,8 @@ async page => {
   await page.keyboard.press('p');
   assert(await page.evaluate(()=>window.selectKeyPrevented===false),'Shortcuts must not intercept native select input');
   await page.locator('[data-nav="pages"]').click();await page.getByRole('button',{name:'Add pages',exact:true}).click();
-  await page.locator('#bulk-urls').fill('n');await page.keyboard.press('p');
-  assert(await page.locator('#bulk-urls').inputValue()==='np','Dialog typing must remain untouched');
+  await page.locator('#bulk-urls').fill('n');await page.keyboard.press('p');await page.keyboard.press('r');
+  assert(await page.locator('#bulk-urls').inputValue()==='npr','Dialog typing must remain untouched');
   await page.getByRole('button',{name:'Cancel',exact:true}).click();
   const base=page.url().split(/[?#]/)[0];
   await page.goto(base+'?'+new URLSearchParams({add:'Example jobs | https://example.com/new-jobs'}));
@@ -74,5 +81,5 @@ async page => {
   await page.locator('#add-submit').click();await page.waitForFunction(()=>!document.querySelector('dialog').open);
   assert(await page.evaluate(async()=>(await import('./core/db.js')).all('pages').then(p=>p.some(v=>v.url==='https://example.com/new-jobs'))),'Current site must save through the normal add flow');
   assert(!errors.length,errors.join('\n'));
-  return {ok:true,coverage:['global arrow scrolling','page-level N/P navigation','page filter following','boundary behavior','retired J/K','native typing','popup draft handoff and save']};
+  return {ok:true,coverage:['global arrow scrolling','page-level N/P navigation','page filter following','forward wrap','R marks current change as read','retired J/K','native typing','popup draft handoff and save']};
 }
